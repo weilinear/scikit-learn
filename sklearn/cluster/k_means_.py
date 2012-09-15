@@ -9,6 +9,7 @@
 #          Olivier Grisel <olivier.grisel@ensta.org>
 #          Mathieu Blondel <mathieu@mblondel.org>
 #          Robert Layton <robertlayton@gmail.com>
+#          Wei LI <kuantkid@gmail.com>
 # License: BSD
 
 import warnings
@@ -23,6 +24,7 @@ from ..utils import check_arrays
 from ..utils import check_random_state
 from ..utils import atleast2d_or_csr
 from ..utils import as_float_array
+from ..utils.extmath import safe_sparse_dot
 from ..externals.joblib import Parallel
 from ..externals.joblib import delayed
 
@@ -499,11 +501,14 @@ def _centers(X, labels, n_clusters, distances):
     n_features = X.shape[1]
 
     # TODO: explicit dtype handling
-    centers = np.empty((n_clusters, n_features))
-    far_from_centers = None
-    reallocated_idx = 0
+    empty_cluster = {};
     sparse_X = sp.issparse(X)
+    
+    # label clone
+    reallocated_idx = 0
 
+    # deal with empty centers
+    far_from_centers = None
     for center_id in range(n_clusters):
         center_mask = labels == center_id
         if sparse_X:
@@ -512,14 +517,18 @@ def _centers(X, labels, n_clusters, distances):
             # Reassign empty cluster center to sample far from any cluster
             if far_from_centers is None:
                 far_from_centers = distances.argsort()[::-1]
-            new_centers = X[far_from_centers[reallocated_idx]]
-            if sparse_X:
-                new_centers = new_centers.todense().ravel()
-            centers[center_id] = new_centers
+            empty_cluster[center_id] = far_from_centers[reallocated_idx]
             reallocated_idx += 1
-        else:
-            centers[center_id] = X[center_mask].mean(axis=0)
-    return centers
+    # calculate indicator matrix
+    labels_unique, labels_normalized = np.unique(labels, return_inverse=True)
+    cluster_indicator = sp.coo_matrix((np.ones(labels.shape[0] + len(empty_cluster)),
+                                       (np.concatenate([labels,np.array(empty_cluster.keys())]),
+                                        np.concatenate([np.arange(X.shape[0]), np.array(empty_cluster.values())]))),
+                                      shape=(n_clusters, X.shape[0]),dtype=np.float64).todense();
+    # normalize cluster_indicator
+    cluster_indicator /= cluster_indicator.sum(axis=1)
+    centers = cluster_indicator * X
+    return np.array(centers, dtype=np.float64)
 
 
 def _init_centroids(X, k, init, random_state=None, x_squared_norms=None,
