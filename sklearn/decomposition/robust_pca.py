@@ -3,6 +3,7 @@
 # License: BSD style
 
 import numpy as np
+import warnings
 from scipy.sparse.linalg import svds
 
 from ..base import BaseEstimator, TransformerMixin
@@ -53,10 +54,10 @@ class RobustPCA(BaseEstimator, TransformerMixin):
     `error_` : array
         Vector of errors at each iteration.
     """
-    def __init__(self, lam=1., tau=.9, delta=0.1,
-            max_iter=1000, tol=1e-8, method='svt', A_init=None,
+    def __init__(self, lam=None, tau=1e4, delta=0.01,
+            max_iter=1000, tol=1e-10, method='svt', A_init=None,
             E_init=None, verbose=False, random_state=None):
-        self.lam = lam
+        self.lam = None
         self.delta = delta
         self.max_iter = max_iter
         self.tau = tau
@@ -75,29 +76,38 @@ class RobustPCA(BaseEstimator, TransformerMixin):
         tol = self.tol
         delta = self.delta
 
+
         n_samples, n_features = X.shape
+        if lam is None:
+            lam = self.lam = 1. / np.sqrt(n_features)
         Y = np.zeros(shape=(n_samples, n_features),dtype=np.float)
         A = np.zeros(shape=(n_samples, n_features),dtype=np.float)
         E = np.zeros(shape=(n_samples, n_features),dtype=np.float)
 
         for _iter in range(self.max_iter):
-            U,S,V = svds(X, A_rank + 1, 'L')
-            print U.shape, S.shape, V.shape
+            U,S,V = svds(Y, A_rank + 1, 'L')
             A = np.dot(np.dot(U,np.diag(_pos(S - tau))),V)
-            E[:] = np.sign(Y) * _pos(np.abs(Y) - lam * tau)
+            E = np.sign(Y) * _pos(np.abs(Y) - lam * tau)
             M = X - A - E
             
             A_rank = np.sum(S > tau)
             E_card = np.sum(np.abs(E) > 0)
 
             Y = Y + delta * M
+
             if self.verbose:
-                print "%02d: |A|_f: %f rank(A): %d" %(_iter, (A*A).sum(), A_rank)
+                print "%04d: |A|_f: %f rank(A): %d" %(_iter, (A*A).sum(), A_rank)
                 print "\t |E|_f: %f |E|_0 : %d" %((E*E).sum(), E_card)
-                print "\t |D-A-E|_F" %((M*M).sum())
+                print "\t |X-A-E|_F %f" %((M*M).sum())
+                print "\t |X-A-E|_F/X %f" %((M*M).sum() / (X**2).sum())
 
             if ((X-A-E)**2).sum()/(X**2).sum() < tol:
-                converged = true
+                converged = True
                 break
+            if A_rank == X.shape[1] - 1:
+                warnings.warn("Rank reaches at the largest "
+                             "try to reduce the number of ")
+                break
+
         return A, E
         
